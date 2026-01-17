@@ -463,6 +463,20 @@ User said: "google" | "hard" | "10"
 User said: "all companies" | "give me 100"
 → intent_type: "company", company_name: "all", num_questions: 100
 
+
+Examples:
+User said: "easy" | "arrays" | "100 questions"
+→ intent_type: "leetcode", topics: ["arrays"], difficulty: "easy", num_questions: 100
+
+User said: "google" | "hard" | "10"
+→ intent_type: "company", company_name: "google", difficulty: "hard", num_questions: 10
+
+User said: "amazon and google" | "17 hard"
+→ intent_type: "company", company_name: "google, amazon", difficulty: "hard", num_questions: 17
+
+User said: "all companies" | "give me 100"
+→ intent_type: "company", company_name: "all", num_questions: 100
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT FORMAT (STRICT JSON)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -585,7 +599,7 @@ def leetcode_search_agent(state: AgentState) -> AgentState:
 # AGENT 4: COMPANY SEARCH AGENT
 # ==========================================
 def company_search_agent(state: AgentState) -> AgentState:
-    """Searches company-specific questions"""
+    """Searches company-specific questions with multi-company support"""
     intent = state["intent_classification"]
     query = state["user_message"]
     
@@ -593,13 +607,20 @@ def company_search_agent(state: AgentState) -> AgentState:
     num_questions = int(intent.get("num_questions", 15))
     difficulty = (intent.get("difficulty") or "any").lower()
     
-    if company_name == "all" or company_name == "":
+    # Parse multiple companies (e.g., "google, amazon" → ["google", "amazon"])
+    if company_name and company_name not in ["all", ""]:
+        companies = [c.strip() for c in company_name.replace(" and ", ",").split(",")]
+        companies = [c for c in companies if c]  # Remove empty strings
+    else:
+        companies = []
+    
+    if not companies or company_name == "all":
         search_query = f"{query} company interview questions"
         company_name = "all"
         print(f"🏢 Company search: ALL COMPANIES ({num_questions} questions)")
     else:
-        search_query = f"{query} {company_name} interview"
-        print(f"🏢 Company search: {company_name.upper()} ({num_questions} questions)")
+        search_query = f"{query} {' '.join(companies)} interview"
+        print(f"🏢 Company search: {', '.join([c.upper() for c in companies])} ({num_questions} questions)")
     
     query_embedding = embedding_model.encode([search_query])
     faiss.normalize_L2(query_embedding)
@@ -626,13 +647,14 @@ def company_search_agent(state: AgentState) -> AgentState:
         question["source"] = "company"
         matched_questions.append(question)
     
-    if company_name and company_name != "all":
+    # FIX: Filter by ANY of the companies, not exact match
+    if company_name != "all" and companies:
         before = len(matched_questions)
         matched_questions = [
             q for q in matched_questions 
-            if company_name in q.get("Company", "").lower()
+            if any(comp in q.get("Company", "").lower() for comp in companies)
         ]
-        print(f"   🔍 Company filter: {before} → {len(matched_questions)}")
+        print(f"   🔍 Company filter ({', '.join(companies)}): {before} → {len(matched_questions)}")
     
     if difficulty != "any":
         before = len(matched_questions)
@@ -644,10 +666,14 @@ def company_search_agent(state: AgentState) -> AgentState:
     
     matched_questions = matched_questions[:num_questions]
     
+    if len(matched_questions) < num_questions:
+        print(f"   ⚠️  Only found {len(matched_questions)} out of {num_questions} requested")
+    
     state["company_questions"] = matched_questions
     state["company_interpretation"] = {
         "search_query": search_query,
         "company": company_name,
+        "companies": companies if companies else ["all"],
         "num_found": len(matched_questions),
         "num_requested": num_questions
     }
@@ -655,6 +681,7 @@ def company_search_agent(state: AgentState) -> AgentState:
     print(f"✅ Company: {len(matched_questions)} questions")
     
     return state
+
 
 # ==========================================
 # AGENT 5: SCHEDULER AGENT
@@ -730,7 +757,7 @@ def route_from_planner(state: AgentState) -> Literal["leetcode", "company", "hyb
     return intent_type
 
 # ==========================================
-# BUILD LANGGRAPH
+# BUILD LANGGRAPH (FIXED - NO INFINITE LOOP)
 # ==========================================
 workflow = StateGraph(AgentState)
 
@@ -744,10 +771,10 @@ workflow.add_node("scheduler", scheduler_agent)
 # Entry point: ALWAYS chat first
 workflow.set_entry_point("chat")
 
-# FIX: Chat decides: planner or end (use route_from_chat, not route_from_planner!)
+# Chat decides: planner or end
 workflow.add_conditional_edges(
     "chat",
-    route_from_chat,  # ✅ CORRECT FUNCTION
+    route_from_chat,
     {
         "planner": "planner",
         "end": END
@@ -761,20 +788,39 @@ workflow.add_conditional_edges(
     {
         "leetcode": "leetcode",
         "company": "company",
-        "hybrid": "leetcode"
+        "hybrid": "leetcode"  # Hybrid starts with leetcode
     }
 )
 
 # LeetCode → scheduler
 workflow.add_edge("leetcode", "scheduler")
 
-# Company → scheduler
+# Company → scheduler (directly, no loops!)
 workflow.add_edge("company", "scheduler")
 
-# Hybrid: scheduler → company → scheduler → end
+# Scheduler routing (FIX: Prevent infinite loop)
+def route_from_scheduler(state: AgentState) -> Literal["company", "end"]:
+    """
+    Route from scheduler:
+    - If hybrid AND no company questions yet → go to company
+    - Otherwise → end
+    """
+    intent_type = state["intent_classification"].get("intent_type")
+    has_company_questions = len(state.get("company_questions", [])) > 0
+    
+    # Only go to company if:
+    # 1. Intent is hybrid
+    # 2. We don't have company questions yet
+    if intent_type == "hybrid" and not has_company_questions:
+        print("🔀 Scheduler → Company (hybrid mode)")
+        return "company"
+    
+    print("🔀 Scheduler → End")
+    return "end"
+
 workflow.add_conditional_edges(
     "scheduler",
-    lambda state: "company" if state["intent_classification"].get("intent_type") == "hybrid" and not state.get("company_questions") else "end",
+    route_from_scheduler,
     {
         "company": "company",
         "end": END
