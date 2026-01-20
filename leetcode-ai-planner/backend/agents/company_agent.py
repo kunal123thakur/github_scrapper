@@ -1,5 +1,5 @@
 """
-Company-specific search agent
+Company-specific search agent with proper FAISS indexing
 """
 import numpy as np
 import faiss
@@ -8,7 +8,7 @@ from models.state import AgentState
 
 
 def company_search_agent(state: AgentState) -> AgentState:
-    """Searches company-specific questions with multi-company support"""
+    """Searches company-specific questions"""
     intent = state["intent_classification"]
     query = state["user_message"]
     
@@ -44,10 +44,14 @@ def company_search_agent(state: AgentState) -> AgentState:
     k = min(num_questions * retrieval_multiplier, len(vector_store.company_df))
     similarities, indices = vector_store.company_index.search(query_embedding, k)
     
+    print(f"   📊 Retrieving {k} candidates...")
+    
     matched_questions = []
+    
+    # FIX: Proper 2D array indexing
     for i in range(len(indices[0])):
-        idx = int(indices[0][i])
-        similarity = float(similarities[0][i])
+        idx = int(indices[0][i])  # ✅ CORRECT
+        similarity = float(similarities[0][i])  # ✅ CORRECT
         
         question = vector_store.company_df.iloc[idx].to_dict()
         question["similarity_score"] = similarity
@@ -56,19 +60,26 @@ def company_search_agent(state: AgentState) -> AgentState:
     
     # Filter by companies
     if company_name != "all" and companies:
+        before = len(matched_questions)
         matched_questions = [
             q for q in matched_questions 
             if any(comp in q.get("Company", "").lower() for comp in companies)
         ]
+        print(f"   🔍 Company filter ({', '.join(companies)}): {before} → {len(matched_questions)}")
     
     # Filter by difficulty
     if difficulty != "any":
+        before = len(matched_questions)
         matched_questions = [
             q for q in matched_questions 
             if q.get("Difficulty", "").lower() == difficulty
         ]
+        print(f"   🔍 Difficulty filter: {before} → {len(matched_questions)}")
     
     matched_questions = matched_questions[:num_questions]
+    
+    if len(matched_questions) < num_questions:
+        print(f"   ⚠️  Only found {len(matched_questions)} out of {num_questions} requested")
     
     state["company_questions"] = matched_questions
     state["company_interpretation"] = {
@@ -79,6 +90,6 @@ def company_search_agent(state: AgentState) -> AgentState:
         "num_requested": num_questions
     }
     
-    print(f"✅ Company: {len(matched_questions)} questions found")
+    print(f"✅ Company: {len(matched_questions)} questions")
     
     return state

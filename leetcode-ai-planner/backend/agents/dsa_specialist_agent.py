@@ -1,5 +1,5 @@
 """
-DSA Specialist Agent - RAG-powered DSA Professor
+DSA Specialist with robust JSON handling
 """
 import re
 import json
@@ -13,118 +13,116 @@ genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel(GEMINI_MODEL_NAME)
 
 
+def clean_json_string(text: str) -> str:
+    """Clean JSON string by properly escaping control characters"""
+    # Remove markdown code blocks
+    text = re.sub(r'```(?:json)?', '', text).strip()
+    
+    # Find JSON object
+    json_match = re.search(r'\{.*\}', text, re.DOTALL)
+    if not json_match:
+        return text
+    
+    json_str = json_match.group()
+    
+    # Escape unescaped newlines inside string values
+    # This regex finds strings and replaces \n with \\n
+    def escape_newlines(match):
+        string_content = match.group(1)
+        # Replace literal newlines with escaped newlines
+        escaped = string_content.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+        return f'"{escaped}"'
+    
+    # Match quoted strings and escape their content
+    cleaned = re.sub(r'"((?:[^"\\]|\\.)*)"', escape_newlines, json_str)
+    
+    return cleaned
+
+
 def dsa_specialist_agent(state: AgentState) -> AgentState:
-    """DSA Professor with RAG capabilities"""
+    """DSA Professor with robust JSON parsing"""
     session_id = state["session_id"]
     user_message = state["user_message"]
     
-    # Retrieve relevant knowledge from PDFs
-    if dsa_knowledge_store:
-        print(f"🔍 Searching DSA knowledge for: '{user_message[:50]}...'")
-        knowledge_results = dsa_knowledge_store.search(user_message, top_k=4)
-        
-        # Format context with sources
-        context_parts = []
-        for i, result in enumerate(knowledge_results, 1):
-            context_parts.append(f"""
-[Reference {i} - {result['source']} - Similarity: {result['similarity']:.3f}]
-{result['content']}
-""")
-        context = "\n".join(context_parts)
-        
-        print(f"✅ Retrieved {len(knowledge_results)} relevant chunks")
-    else:
-        context = "Knowledge base not available."
-        print("⚠️  No knowledge base loaded")
-    
-    # Load conversation history
     history = memory_store.get(session_id)
+    print(f"📥 DSA Specialist: Loaded {len(history)} messages")
+    
+    # Retrieve knowledge
+    if dsa_knowledge_store:
+        knowledge_results = dsa_knowledge_store.search(user_message, top_k=3)
+        context = "\n".join([f"[{r['source']}]\n{r['content'][:400]}" for r in knowledge_results])
+    else:
+        context = "No knowledge available."
     
     if history:
-        conversation_context = "\n".join([
-            f"{msg['role'].upper()}: {msg['content']}" 
-            for msg in history[-8:]  # Last 4 exchanges
-        ])
+        conv_context = "\n".join([f"{m['role'].upper()}: {m['content'][:100]}" for m in history[-6:]])
     else:
-        conversation_context = "First interaction with this student."
+        conv_context = "First interaction."
     
     prompt = f"""
-You are **Professor DSA**, a world-class expert in Data Structures and Algorithms with decades of teaching experience. You combine deep technical knowledge with an approachable, encouraging teaching style.
+You are Professor DSA.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📚 RETRIEVED KNOWLEDGE FROM DSA TEXTBOOKS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+KNOWLEDGE:
 {context}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-💬 CONVERSATION HISTORY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-{conversation_context}
+HISTORY:
+{conv_context}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🎓 STUDENT'S QUESTION
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QUESTION:
 {user_message}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📋 YOUR TEACHING GUIDELINES
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. **Ground your answer in the retrieved knowledge above** - Reference specific concepts, algorithms, or techniques from the textbook excerpts
-2. **Explain with clarity** - Start with intuition, then provide technical details
-3. **Use examples** - Provide concrete examples or code snippets when helpful (Python preferred)
-4. **Complexity analysis** - Always mention time/space complexity for algorithms
-5. **Build upon previous conversation** - Reference earlier questions if relevant
-6. **Encourage learning** - Be warm and supportive, acknowledge good questions
-7. **Structure your response**:
-   - Brief direct answer first
-   - Detailed explanation with examples
-   - Complexity analysis (if applicable)
-   - Related concepts or next steps
+Provide a clear DSA explanation. Use markdown for formatting.
 
-IMPORTANT: If the retrieved knowledge contains relevant information, USE IT and reference it in your explanation. If the question is about concepts not well-covered in the retrieved chunks, use your general DSA knowledge but acknowledge this.
+**CRITICAL JSON FORMAT RULES:**
+1. The "response" field must have ALL newlines as \\n (two characters)
+2. Use \\n\\n for paragraph breaks
+3. Use \\n for line breaks
+4. No literal newlines inside the JSON string
 
-Output format:
+Example correct format:
 {{
-  "response": "Your detailed, educational response as Professor DSA. Use markdown for code blocks and formatting.",
-  "concepts_covered": ["concept1", "concept2", "..."],
-  "complexity_mentioned": {{"time": "O(n)", "space": "O(1)"}},
-  "follow_up_suggestion": "Optional: What the student should explore next",
-  "confidence": "high/medium/low based on relevance of retrieved knowledge"
+  "response": "First paragraph.\\n\\nSecond paragraph with\\nline break.",
+  "concepts_covered": ["arrays"],
+  "complexity": {{"time": "O(n)"}},
+  "follow_up": "",
+  "confidence": "high"
 }}
 
-Be professorial yet warm. Make DSA accessible and exciting!
+Output valid JSON:
 """
     
     try:
         response = model.generate_content(prompt)
-        text = re.sub(r'```(?:json)?', '', response.text).strip()
         
-        # Extract JSON
-        json_match = re.search(r'\{.*\}', text, re.DOTALL)
-        if json_match:
-            output = json.loads(json_match.group())
-        else:
-            output = json.loads(text)
+        # Clean and parse
+        cleaned_text = clean_json_string(response.text)
         
-        specialist_response = output.get("response", "I'm here to help you understand DSA!")
+        try:
+            output = json.loads(cleaned_text)
+        except json.JSONDecodeError as e:
+            print(f"⚠️  JSON parse error: {e}")
+            print(f"Cleaned text: {cleaned_text[:300]}")
+            # Fallback: extract response manually
+            output = {"response": response.text[:500], "concepts_covered": [], "confidence": "low"}
+        
+        specialist_response = output.get("response", "I can help with DSA questions!")
         concepts = output.get("concepts_covered", [])
-        complexity = output.get("complexity_mentioned", {})
-        follow_up = output.get("follow_up_suggestion", "")
+        complexity = output.get("complexity", {})
+        follow_up = output.get("follow_up", "")
         confidence = output.get("confidence", "medium")
         
-        print(f"🎓 Professor DSA responded with {confidence} confidence")
-        print(f"   Concepts covered: {', '.join(concepts[:3])}")
+        # Convert \\n to actual newlines for display
+        specialist_response = specialist_response.replace('\\n', '\n')
         
     except Exception as e:
-        print(f"⚠️ DSA Specialist error: {e}")
-        print(f"Raw response: {response.text if 'response' in locals() else 'N/A'}")
-        specialist_response = "I'm having trouble processing that question. Could you rephrase it or ask about a specific DSA topic?"
+        print(f"❌ Error: {e}")
+        specialist_response = "Could you rephrase your DSA question?"
         concepts = []
         complexity = {}
         follow_up = ""
         confidence = "low"
     
-    # Save conversation
+    # Save
     history.append({"role": "user", "content": user_message})
     history.append({"role": "assistant", "content": specialist_response})
     memory_store.set(session_id, history)
@@ -138,5 +136,7 @@ Be professorial yet warm. Make DSA accessible and exciting!
     state["dsa_confidence"] = confidence
     state["reroute_to_planner"] = False
     state["chat_history"] = history
+    
+    print(f"✅ DSA Response: {len(specialist_response)} chars, {len(concepts)} concepts")
     
     return state
