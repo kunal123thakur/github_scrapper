@@ -47,6 +47,31 @@ def dsa_specialist_agent(state: AgentState) -> AgentState:
     history = memory_store.get(session_id)
     print(f"📥 DSA Specialist: Loaded {len(history)} messages")
     
+    # 🆕 NEW: Check if user is referring to specific questions
+    last_questions = state.get("last_questions_shown", [])
+    question_context = ""
+    
+    if last_questions and any(keyword in user_message.lower() for keyword in ['second', 'third', 'first', 'last', 'these questions', 'those questions', 'this question']):
+        # Extract which question(s) they're asking about
+        import re
+        number_match = re.search(r'(first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th|(\d+))', user_message.lower())
+        
+        if number_match:
+            num_word = number_match.group(1)
+            num_map = {'first': 0, '1st': 0, 'second': 1, '2nd': 1, 'third': 2, '3rd': 2, 'fourth': 3, '4th': 3, 'fifth': 4, '5th': 4}
+            idx = num_map.get(num_word, int(num_word) - 1 if num_word.isdigit() else 0)
+            
+            if idx < len(last_questions):
+                q = last_questions[idx]
+                title = q.get("title") or q.get("task_id", "").replace("-", " ").title() or q.get("Question_Name", "")
+                question_context = f"\n\n**USER IS ASKING ABOUT THIS SPECIFIC QUESTION:**\nQuestion #{idx+1}: {title}\nTags: {q.get('tags', [])}\nURL: {q.get('url', q.get('Problem_Link', ''))}\n\nProvide a complete solution explanation for THIS question."
+                print(f"   🎯 Detected reference to question #{idx+1}: {title}")
+        
+        elif 'these' in user_message.lower() or 'those' in user_message.lower():
+            titles = [q.get("title") or q.get("task_id", "").replace("-", " ").title() or q.get("Question_Name", "") for q in last_questions[:5]]
+            question_context = f"\n\n**USER IS ASKING ABOUT THESE QUESTIONS:**\n" + "\n".join([f"{i+1}. {t}" for i, t in enumerate(titles)])
+            print(f"   🎯 Detected reference to multiple questions")
+    
     # Retrieve knowledge
     if dsa_knowledge_store:
         knowledge_results = dsa_knowledge_store.search(user_message, top_k=3)
@@ -59,6 +84,7 @@ def dsa_specialist_agent(state: AgentState) -> AgentState:
     else:
         conv_context = "First interaction."
     
+    # 🆕 UPDATED: Add question context to prompt
     prompt = f"""
 You are Professor DSA.
 
@@ -67,6 +93,7 @@ KNOWLEDGE:
 
 HISTORY:
 {conv_context}
+{question_context}
 
 QUESTION:
 {user_message}
@@ -90,6 +117,9 @@ Example correct format:
 
 Output valid JSON:
 """
+    
+    # ... rest of your existing code stays the same ...
+
     
     try:
         response = model.generate_content(prompt)

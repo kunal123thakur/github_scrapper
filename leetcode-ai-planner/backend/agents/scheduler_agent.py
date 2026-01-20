@@ -4,7 +4,6 @@ Scheduler agent - Creates daily schedule
 from datetime import date, timedelta
 from models.state import AgentState
 
-
 def scheduler_agent(state: AgentState) -> AgentState:
     """Creates schedule for questions"""
     intent = state["intent_classification"]
@@ -21,6 +20,7 @@ def scheduler_agent(state: AgentState) -> AgentState:
     
     if not all_questions:
         state["combined_schedule"] = {}
+        state["last_questions_shown"] = []  # 🆕 NEW
         return state
     
     all_questions = sorted(all_questions, key=lambda x: -x.get("similarity_score", 0))
@@ -54,6 +54,11 @@ def scheduler_agent(state: AgentState) -> AgentState:
         schedule_map.setdefault(str(day), []).append(question_entry)
     
     state["combined_schedule"] = schedule_map
+    
+    # 🆕 NEW: Save questions for future reference
+    state["last_questions_shown"] = all_questions
+    
     print(f"📅 Scheduled {len(all_questions)} questions over {duration} days")
+    print(f"💾 Context: Saved {len(all_questions)} questions for reference")  # 🆕 NEW
     
     return state

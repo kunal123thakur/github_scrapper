@@ -167,4 +167,25 @@ REMEMBER: "similar question" means use the topics from the conversation!
     print(f"   Count: {intent['num_questions']}")
     print(f"   Reasoning: {intent.get('reasoning', 'N/A')}")
     
+
+    # ... your existing planner code ...
+
+    state["intent_classification"] = intent
+    state["tools_selected"] = intent["tools_selected"]
+    
+    # 🆕 NEW: Save context for next query (just 3 lines!)
+    state["context_topics"] = intent.get("topics", topics_mentioned)
+    state["context_company"] = intent.get("company_name", "")
+    
+    print(f"🎯 Planner with context awareness:")
+    print(f"   Intent: {intent['intent_type']}")
+    print(f"   Topics detected from conversation: {topics_mentioned}")
+    print(f"   Topics for search: {intent.get('topics', [])}")
+    print(f"   Difficulty: {intent.get('difficulty')}")
+    print(f"   Count: {intent['num_questions']}")
+    print(f"   Reasoning: {intent.get('reasoning', 'N/A')}")
+    print(f"   💾 Context saved: topics={state['context_topics']}, company={state['context_company']}")  # 🆕 NEW
+    
+    return state
+
     return state

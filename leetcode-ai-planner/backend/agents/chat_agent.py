@@ -11,7 +11,6 @@ from models.state import AgentState
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel(GEMINI_MODEL_NAME)
 
-
 def chat_agent(state: AgentState) -> AgentState:
     """Smart chat agent with guaranteed response"""
     session_id = state["session_id"]
@@ -21,35 +20,54 @@ def chat_agent(state: AgentState) -> AgentState:
     history = memory_store.get(session_id)
     print(f"📥 Loaded {len(history)} messages from Redis for session '{session_id}'")
     
+    # 🆕 NEW: Load context
+    last_questions = state.get("last_questions_shown", [])
+    context_topics = state.get("context_topics", [])
+    context_company = state.get("context_company", "")
+    
+    print(f"   📦 Context: {len(last_questions)} questions, topics={context_topics}, company={context_company}")
+    
     if history:
         recent = history[-20:]
         conv_context = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in recent])
     else:
         conv_context = "No previous conversation."
     
-    # ============================================
-    # STAGE 1: ROUTING DECISION
-    # ============================================
+    # 🆕 UPDATED: Enhanced routing prompt with context awareness
     routing_prompt = f"""
 You are a routing agent for Bhindi AI.
 
 CONVERSATION HISTORY:
 {conv_context}
 
+CONTEXT FROM PREVIOUS QUERIES:
+- Last topics: {', '.join(context_topics) if context_topics else 'None'}
+- Last company: {context_company if context_company else 'None'}
+- Questions shown: {len(last_questions)}
+
 USER'S MESSAGE:
 {user_message}
 
-ROUTING RULES:
+ROUTING RULES WITH CONTEXT AWARENESS:
 - Route to "specialist" → DSA learning questions (explain, what is, how does, teach me)
-- Route to "planner" → Practice requests (give me questions, create schedule, similar questions)
-- Route to "chat" → Greetings, personal questions, clarifications, thanks
+  * ALSO route to "specialist" if user says "explain this/these/second/third question"
+  
+- Route to "planner" → Practice requests (give me questions, create schedule)
+  * "similar questions" → Use context_topics
+  * "company questions" → Switch from leetcode to company with same topics
+  * "google questions" → Company-specific with context topics
+  
+- Route to "chat" → Greetings, personal questions, thanks, acknowledgments
 
 Output JSON:
 {{
   "route": "specialist|planner|chat",
-  "reasoning": "brief explanation"
+  "reasoning": "brief explanation with context reference if applicable"
 }}
 """
+    
+    # ... rest of your existing code stays the same ...
+
     
     try:
         route_response = model.generate_content(routing_prompt)
