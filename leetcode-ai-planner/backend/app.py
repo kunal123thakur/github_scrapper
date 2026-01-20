@@ -15,7 +15,6 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str = "default"
 
-
 @app.post("/chat")
 def chat(req: ChatRequest):
     """Main chat endpoint"""
@@ -23,12 +22,27 @@ def chat(req: ChatRequest):
         "user_message": req.message,
         "session_id": req.session_id,
         "errors": [],
-        "reroute_to_planner": False
+        "reroute_to_planner": False,
+        "route_to_specialist": False
     }
     
     try:
         result = app_graph.invoke(initial_state)
         
+        # DSA Specialist response
+        if result.get("route_to_specialist"):
+            return {
+                "success": True,
+                "type": "specialist",
+                "response": result.get("chat_response"),
+                "concepts_covered": result.get("dsa_concepts_covered", []),
+                "complexity": result.get("dsa_complexity", {}),
+                "follow_up": result.get("dsa_follow_up", ""),
+                "confidence": result.get("dsa_confidence", "medium"),
+                "session_id": req.session_id
+            }
+        
+        # Regular chat
         if not result.get("reroute_to_planner"):
             return {
                 "success": True,
@@ -37,11 +51,11 @@ def chat(req: ChatRequest):
                 "session_id": req.session_id
             }
         
+        # Question planner
         return {
             "success": True,
             "type": "execution",
             "intent": result["intent_classification"].get("intent_type"),
-            "tools_selected": result.get("tools_selected", []),
             "schedule": result.get("combined_schedule"),
             "total_questions": (
                 len(result.get("leetcode_questions", [])) + 
@@ -54,6 +68,21 @@ def chat(req: ChatRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# # Add knowledge base stats endpoint
+# @app.get("/dsa/stats")
+# def dsa_knowledge_stats():
+#     """Get DSA knowledge base statistics"""
+#     if dsa_knowledge_store:
+#         return {
+#             "success": True,
+#             "stats": dsa_knowledge_store.get_stats()
+#         }
+#     return {
+#         "success": False,
+#         "message": "Knowledge base not loaded"
+#     }
 
 
 @app.get("/health")

@@ -1,5 +1,5 @@
 """
-Chat agent - Entry point with conversation memory
+Chat agent with DSA specialist routing
 """
 import re
 import json
@@ -13,7 +13,7 @@ model = genai.GenerativeModel(GEMINI_MODEL_NAME)
 
 
 def chat_agent(state: AgentState) -> AgentState:
-    """Smart chat agent with context memory"""
+    """Smart chat agent with routing"""
     session_id = state["session_id"]
     user_message = state["user_message"]
     
@@ -29,63 +29,52 @@ def chat_agent(state: AgentState) -> AgentState:
 PREVIOUS CONVERSATION
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {conversation_context}
-
-The user's NEW message is below. Use the conversation history above to maintain context.
 """
     else:
-        history_summary = "This is the first message in this conversation."
+        history_summary = "First message in this conversation."
     
     prompt = f"""
-You are Bhindi AI, a smart DSA interview preparation assistant.
+You are Bhindi AI's routing agent. Analyze the user's intent and route appropriately.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-YOUR CAPABILITIES
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- Find LeetCode questions by topic, difficulty, tags
-- Find company-specific interview questions (Google, Uber, Adobe, etc.)
-- Create personalized study schedules
-- Answer questions about DSA preparation
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CONTEXT AWARENESS (CRITICAL)
+CONTEXT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {history_summary}
 
-IMPORTANT RULES FOR CONTEXT:
-1. **Remember what the user told you** in previous messages
-2. If user mentioned difficulty before, DON'T ask again
-3. If user mentioned topic before, DON'T ask again  
-4. If user mentioned company before, DON'T ask again
-5. If user mentioned count before, DON'T ask again
-6. Build upon previous conversation naturally
-7. When you have enough info, reroute to planner
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ROUTING RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Route to DSA SPECIALIST** (`route_to_specialist = true`) when user is asking about:
+- Conceptual questions: "explain", "what is", "how does", "why"
+- Learning: "teach me", "help me understand", "difference between"
+- Theory: algorithms, data structures, complexity, patterns
+- Problem-solving strategies or approaches
+- Examples: "explain DFS", "what is DP", "how does binary search work"
+
+**Route to PLANNER** (`reroute_to_planner = true`) when user wants:
+- Practice questions: "give me questions", "practice problems"
+- Study schedule: "create schedule", "plan my prep"
+- Specific count + topic: "10 array questions", "hard DP problems"
+- Company-specific: "Google questions", "Amazon interview prep"
+
+**Stay in CHAT** (both false) when:
+- Greeting or casual chat
+- Unclear intent - ask clarification
+- Gathering more information
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-REROUTING DECISION
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Set `reroute_to_planner = true` when you have ENOUGH information:
-- Required: Either a topic OR a company OR "all questions"
-- Optional but helpful: count, difficulty
-
-Set `reroute_to_planner = false` when:
-- Still gathering information
-- User is asking general questions
-- Request is unclear
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-OUTPUT FORMAT (STRICT JSON)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-{{
-  "response": "Your contextual reply to the user",
-  "reroute_to_planner": true/false
-}}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-USER'S NEW MESSAGE
+USER'S MESSAGE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {user_message}
 
-Output ONLY valid JSON:
+Output JSON:
+{{
+  "response": "Your reply (only if staying in chat)",
+  "reroute_to_planner": true/false,
+  "route_to_specialist": true/false,
+  "reasoning": "1-2 sentence explanation"
+}}
 """
     
     try:
@@ -93,28 +82,33 @@ Output ONLY valid JSON:
         text = re.sub(r'```(?:json)?', '', response.text).strip()
         
         json_match = re.search(r'\{.*\}', text, re.DOTALL)
-        if json_match:
-            output = json.loads(json_match.group())
-        else:
-            output = json.loads(text)
+        output = json.loads(json_match.group() if json_match else text)
         
-        chat_response = output.get("response", "I'm here to help with DSA prep!")
-        reroute = output.get("reroute_to_planner", False)
+        chat_response = output.get("response", "How can I help you today?")
+        reroute_planner = output.get("reroute_to_planner", False)
+        route_specialist = output.get("route_to_specialist", False)
+        reasoning = output.get("reasoning", "")
         
     except Exception as e:
         print(f"⚠️ Chat agent error: {e}")
-        chat_response = "I'm here to help! Could you clarify what questions you're looking for?"
-        reroute = False
+        chat_response = "I'm here to help! Are you looking to practice questions or learn DSA concepts?"
+        reroute_planner = False
+        route_specialist = False
+        reasoning = ""
     
-    history.append({"role": "user", "content": user_message})
-    history.append({"role": "assistant", "content": chat_response})
-    memory_store.set(session_id, history)
+    # Only save if staying in chat
+    if not reroute_planner and not route_specialist:
+        history.append({"role": "user", "content": user_message})
+        history.append({"role": "assistant", "content": chat_response})
+        memory_store.set(session_id, history)
     
     state["chat_response"] = chat_response
     state["chat_output"] = chat_response
-    state["reroute_to_planner"] = reroute
+    state["reroute_to_planner"] = reroute_planner
+    state["route_to_specialist"] = route_specialist
     state["chat_history"] = history
     
-    print(f"💬 Chat: {len(history)} messages | Reroute: {reroute}")
+    print(f"💬 Chat: Specialist={route_specialist}, Planner={reroute_planner}")
+    print(f"   Reasoning: {reasoning}")
     
     return state

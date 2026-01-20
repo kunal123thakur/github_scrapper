@@ -1,5 +1,5 @@
 """
-LangGraph workflow definition
+LangGraph workflow with DSA Specialist
 """
 from langgraph.graph import StateGraph, END
 from models.state import AgentState
@@ -8,15 +8,17 @@ from agents.planner_agent import planner_agent
 from agents.leetcode_agent import leetcode_search_agent
 from agents.company_agent import company_search_agent
 from agents.scheduler_agent import scheduler_agent
+from agents.dsa_specialist_agent import dsa_specialist_agent
 from graph.routes import route_from_chat, route_from_planner, route_from_scheduler
 
 
 def build_workflow():
-    """Builds and compiles the agent workflow"""
+    """Build workflow with DSA specialist"""
     workflow = StateGraph(AgentState)
     
-    # Add nodes
+    # Add all nodes
     workflow.add_node("chat", chat_agent)
+    workflow.add_node("specialist", dsa_specialist_agent)
     workflow.add_node("planner", planner_agent)
     workflow.add_node("leetcode", leetcode_search_agent)
     workflow.add_node("company", company_search_agent)
@@ -25,15 +27,19 @@ def build_workflow():
     # Entry point
     workflow.set_entry_point("chat")
     
-    # Chat routing
+    # Chat routing (3-way)
     workflow.add_conditional_edges(
         "chat",
         route_from_chat,
         {
+            "specialist": "specialist",
             "planner": "planner",
             "end": END
         }
     )
+    
+    # Specialist ends conversation
+    workflow.add_edge("specialist", END)
     
     # Planner routing
     workflow.add_conditional_edges(
@@ -46,13 +52,10 @@ def build_workflow():
         }
     )
     
-    # LeetCode → scheduler
+    # Execution flow
     workflow.add_edge("leetcode", "scheduler")
-    
-    # Company → scheduler
     workflow.add_edge("company", "scheduler")
     
-    # Scheduler routing
     workflow.add_conditional_edges(
         "scheduler",
         route_from_scheduler,
@@ -65,5 +68,4 @@ def build_workflow():
     return workflow.compile()
 
 
-# Singleton instance
 app_graph = build_workflow()
